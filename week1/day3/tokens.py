@@ -39,7 +39,7 @@ for prompt in prompts:
     print(f"prompt:{prompt}-->your tokens :{promptToken} Completion Tokens:{CompletionsToken} total tokens:{promptToken+CompletionsToken} finishReason:{response.choices[0].finish_reason}")
 
 
-# messages = [message_system,message]
-# response = client.chat.completions.create(model= model,messages=messages)
-# result = response.choices[0].message.content
-# print(result)
+messages = [message_system,message]
+response = client.chat.completions.create(model= model,messages=messages)
+result = response.choices[0].message.content
+print(result)
