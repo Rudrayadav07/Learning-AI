@@ -25,27 +25,23 @@
 # print("###############################################")
 # result = response.choices[0].message.content
 # print(result)
-import os 
-from pathlib import Path
+import os
 from dotenv import load_dotenv
-from groq import Groq
+from google import genai
 
 load_dotenv()
 
-My_api_key = os.getenv("GROQ_API_KEY")
+api_key = os.getenv("GOOGLE_API_KEY")
+if not api_key:
+    raise ValueError("GOOGLE_API_KEY is not set")
 
-if not My_api_key:
-    raise ValueError("api error")
+client = genai.Client(api_key=api_key)
+model = "gemini-3.8-flash"
+prompt = "is Batman the greatest superhero? answer in one line."
 
-client = Groq(api_key= My_api_key)
-model = "openai/gpt-oss-120b"
-role = "user"
-prompt = "is batman is the greatest superHero answer in one line ?"
-message = {
-    "role": role,
-    "content": prompt,
-}
-messages =[message]
-response = client.chat.completions.create(model= model, messages = messages)
-result = response.choices[0].message.content
-print(result)
+response = client.models.generate_content(
+    model=model,
+    contents=prompt,
+)
+
+print(response.text)
