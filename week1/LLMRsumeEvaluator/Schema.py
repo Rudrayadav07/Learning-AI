@@ -25,6 +25,6 @@ class Resume(BaseModel):
     projects:list[str]
 
 
-jobSchema = JobDiscription.model_json_schema()
+jobSchema = JobDescription.model_json_schema()
 ResumeSchema = Resume.model_json_schema()
 
