@@ -22,7 +22,7 @@ class Resume(BaseModel):
     education:str
     skills:list[str]
     experience:list[Experience]
-    projects:list[str]
+    projects:[str]
 
 
 jobSchema = JobDescription.model_json_schema()
