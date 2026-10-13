@@ -1,155 +1,194 @@
+import ast
+import operator
 import os
 import re
-from time import sleep
+from typing import Any
 
-# from pathlib import Path
-from groq import Groq
 from dotenv import load_dotenv
+from groq import Groq
 
 load_dotenv()
 
-my_api_key = os.getenv("GROQ_API_KEY")
+API_KEY = os.getenv("GROQ_API_KEY")
+if not API_KEY:
+    raise ValueError("GROQ_API_KEY is not set. Add it to your .env file.")
 
-if not my_api_key:
-    raise ValueError("API key is not found")
-
-client = Groq(api_key=my_api_key)
-model = "openai/gpt-oss-120b"
-
-# Tools
-def get_product_price(product):
-    if product == "iPhone 17":
-        return 1000
-    elif product == "iPhone 15":
-        return 500
-    else:
-        return 0
+client = Groq(api_key=API_KEY)
+MODEL = "openai/gpt-oss-120b"
 
 
-def calculator(expression):
+def get_product_price(product: str) -> int:
+    """Return the price for a known product name."""
+    products = {
+        "iPhone 17": 1000,
+        "iPhone 15": 500,
+        "iPhone 13": 700,
+    }
+    return products.get(product.strip(), 0)
+
+
+def _safe_eval(node: ast.AST) -> Any:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+
+    if isinstance(node, ast.BinOp):
+        left = _safe_eval(node.left)
+        right = _safe_eval(node.right)
+        ops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.FloorDiv: operator.floordiv,
+            ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+        }
+        if type(node.op) not in ops:
+            raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+        return ops[type(node.op)](left, right)
+
+    if isinstance(node, ast.UnaryOp):
+        operand = _safe_eval(node.operand)
+        ops = {
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+            ast.Not: operator.not_,
+        }
+        if type(node.op) not in ops:
+            raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+        return ops[type(node.op)](operand)
+
+    if isinstance(node, ast.Tuple):
+        return tuple(_safe_eval(item) for item in node.elts)
+
+    if isinstance(node, ast.List):
+        return [_safe_eval(item) for item in node.elts]
+
+    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+
+def calculator(expression: str) -> Any:
+    """Evaluate a restricted arithmetic expression safely."""
+    if not isinstance(expression, str):
+        return "Calc error!"
+
+    sanitized_expression = expression.strip()
+    if not sanitized_expression:
+        return "Calc error!"
+
     try:
-        return eval(expression)
+        parsed = ast.parse(sanitized_expression, mode="eval")
+        result = _safe_eval(parsed.body)
+        if isinstance(result, complex):
+            return "Calc error!"
+        return result
     except Exception:
         return "Calc error!"
 
 
-tools = {
+TOOLS = {
     "get_product_price": get_product_price,
-    "calculator": calculator
+    "calculator": calculator,
 }
 
-
-system_prompt = """
+SYSTEM_PROMPT = """
 You are a shopping assistant.
 
-You have these tools:
+You have access to these tools:
+- get_product_price(product)
+- calculator(expression)
 
-get_product_price(product)
-calculator(expression)
+Important rules:
+1. Decide what you need to do next.
+2. Call exactly ONE tool at a time.
+3. After writing an Action, stop immediately.
+4. Never make up tool results.
+5. Wait for the Observation before deciding the next step.
+6. When the task is complete, provide a Final Answer.
 
-IMPORTANT:
-Call tools exactly like these examples:
+Use this format:
+Thought: <your reasoning>
+Action: tool_name(argument)
 
+When done:
+Final Answer: <your answer>
+
+Examples:
 Action: get_product_price("iPhone 17")
 Action: calculator("5000 - 1000")
 
-Never write:
-get_product_price(product="iPhone 17")
-
-Never write:
-calculator(expression="5000 - 1000")
-
-Follow these rules:
-
-1. Decide what you need to do next.
-2. Call ONLY ONE tool at a time.
-3. After writing an Action, STOP immediately.
-4. Never guess or invent a tool result.
-5. Wait until you receive an Observation.
-6. Then decide your next action.
-7. When the task is complete, give the Final Answer.
-
-Format:
-
-Thought: what you need to do
-Action: tool_name(argument)
-
-When finished:
-
-Final Answer: your answer
+Do not use keyword arguments like get_product_price(product="iPhone 17").
 """
 
 
-def run_agent(question):
+def parse_action(response: str):
+    """Extract the single tool call from the model output."""
+    if not response:
+        return None, None
+
+    match = re.search(r"Action:\s*(\w+)\((.*?)\)", response, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None, None
+
+    tool_name = match.group(1)
+    raw_argument = match.group(2).strip()
+
+    if raw_argument.startswith(("\"", "'")) and raw_argument.endswith(("\"", "'")):
+        argument = raw_argument[1:-1]
+    else:
+        try:
+            argument = ast.literal_eval(raw_argument)
+        except (ValueError, SyntaxError):
+            argument = raw_argument
+
+    return tool_name, argument
+
+
+def execute_tool(tool_name: str, tool_input: Any) -> Any:
+    tool = TOOLS.get(tool_name)
+    if tool is None:
+        return f"Tool not found: {tool_name}"
+    return tool(tool_input)
+
+
+def run_agent(question: str, max_steps: int = 5) -> str:
     messages = [
-        {
-            "role": "system",
-            "content": system_prompt
-        },
-        {
-            "role": "user",
-            "content": question
-        }
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": question},
     ]
 
-    for steps in range(5):
-        print("\n-----------------")
-        print("STEP", steps + 1)
-        print("------------------")
-
+    for step in range(max_steps):
+        print(f"\n-----------------\nSTEP {step + 1}\n------------------")
         response = client.chat.completions.create(
-            model=model,
-            messages=messages
+            model=MODEL,
+            messages=messages,
+            temperature=0.2,
         )
 
-        result = response.choices[0].message.content
+        result = (response.choices[0].message.content or "").strip()
         print(result)
 
-        # Agent has finished
-        if "final answer:" in result.lower():
-            break
+        if re.search(r"Final Answer:\s*", result, flags=re.IGNORECASE):
+            return result
 
-        # Find the action
-        match = re.search(
-            r'Action:\s*(\w+)\((.*?)\)',
-            result
-        )
+        tool_name, tool_input = parse_action(result)
+        if tool_name is None:
+            return "The model did not provide a valid tool action."
 
-        if not match:
-            print("No valid action found.")
-            break
+        observation = execute_tool(tool_name, tool_input)
+        print(f"Observation: {observation}")
 
-        tool_name = match.group(1)
-        tool_input = match.group(2).strip()
-        tool_input = tool_input.strip('"').strip("'")
+        messages.append({"role": "assistant", "content": result})
+        messages.append({"role": "user", "content": f"Observation: {observation}"})
 
-        # Run the tool
-        if tool_name in tools:
-            tool = tools[tool_name]
-            observation = tool(tool_input)
-        else:
-            observation = "Tool not found: " + tool_name
-
-        print("Observation:", observation)
-
-        # Add the LLM response to memory
-        messages.append({
-            "role": "assistant",
-            "content": result
-        })
-
-        # Give the tool result back to the LLM
-        messages.append({
-            "role": "user",
-            "content": "Observation: " + str(observation)
-        })
-
-        sleep(5)
+    return "The agent could not complete the task within the allowed steps."
 
 
-prompt = """
-I have 5000 rs. What is the price of iPhone 17?
-And how much money will I have left?
-"""
+if __name__ == "__main__":
+    prompt = """
+    I have 5000 rs. What is the price of iPhone 17?
+    And how much money will I have left?
+    """
 
-run_agent(prompt)
+    final_answer = run_agent(prompt)
+    print("\n" + final_answer)
