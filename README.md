@@ -31,3 +31,4 @@ uv run python hello_llm.py
 ```
 
 Copy `.env.example` to `.env` and add your API key before running a lesson that uses an external API. Never commit `.env`.
+.
